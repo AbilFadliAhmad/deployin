@@ -10,14 +10,12 @@
 
     <div class="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
 
-        <!-- Logo / Header -->
         <div class="text-center mb-8">
             <div class="text-4xl mb-2">🚀</div>
             <h2 class="text-2xl font-bold text-gray-800">Masuk ke Deployin</h2>
             <p class="text-gray-500 text-sm mt-1">Masukkan kredensial Anda untuk melanjutkan</p>
         </div>
 
-        <!-- Menangkap Pesan Error dari Flask -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -28,7 +26,6 @@
             {% endif %}
         {% endwith %}
 
-        <!-- Form Login -->
         <form action="/login" method="POST" class="space-y-6">
             <div>
                 <label class="block text-sm font-semibold mb-2 text-gray-700">Username</label>
@@ -44,6 +41,21 @@
                 Masuk
             </button>
         </form>
+
+        <div class="relative flex py-4 items-center mt-4">
+            <div class="flex-grow border-t border-gray-200"></div>
+            <span class="flex-shrink mx-4 text-gray-400 text-xs font-medium uppercase tracking-wider">Kendala Masuk?</span>
+            <div class="flex-grow border-t border-gray-200"></div>
+        </div>
+
+        <a href="https://wa.me/6285117660334?text=Halo%20Admin%20Deployin%2c%20saya%20mengalami%20kendala%20saat%20mencoba%20masuk%20ke%20halaman%20dashboard.%20Mohon%20bantuannya%20untuk%20mengecek%20status%20akun%20saya.%20Terima%20kasih!"
+           target="_blank"
+           class="w-full inline-flex items-center justify-center space-x-2 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-lg shadow-sm transition duration-200 transform active:scale-98">
+            <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397 0 11.93 0c3.166.001 6.142 1.233 8.379 3.473 2.238 2.24 3.466 5.214 3.466 8.384 0 6.533-5.338 11.882-11.87 11.882-1.996-.001-3.955-.5-5.69-1.448L0 24zm6.59-4.817c1.66.985 3.292 1.503 5.279 1.505 5.352 0 9.704-4.322 9.706-9.634.002-2.573-1.002-4.993-2.83-6.824C16.903 2.401 14.49 1.393 11.93 1.393c-5.357 0-9.713 4.321-9.715 9.634-.001 1.897.494 3.748 1.433 5.394l-.993 3.63 3.73-.974z"/>
+            </svg>
+            <span>Hubungi Admin via WhatsApp</span>
+        </a>
 
         <div class="mt-6 text-center">
             <a href="/" class="text-sm text-gray-500 hover:text-purple-600 transition">
