@@ -485,9 +485,7 @@
 
                     // Hentikan Loop Animasi Menunggu karena data sudah kembali dari VPS
                     isProcessing = false;
-                    console.log('sebelum: ', result.log)
                     logContent.innerText = result.log; // Bersihkan kalimat menunggu terakhir
-                    console.log('sesudah: ',logContent.innerText)
 
                     if (result.status === 'success' || result.status === 'warning') {
                         logContent.innerText += "\n\n[DEPLOYIN] ✅ Proses Eksekusi Selesai Sukses!";
