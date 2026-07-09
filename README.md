@@ -44,25 +44,25 @@ To get a local copy up and running, follow these simple steps.
    ```bash
    git clone [https://github.com/AbilFadliAhmad/deployin.git](https://github.com/AbilFadliAhmad/deployin.git)
    cd deployin
-Create and activate a virtual environment:
+   
+2. **Create and activate a virtual environment:**
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows use: venv\Scripts\activate
 
-Bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
-Install the dependencies:
+3. **Install the dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   
+4. **Set up the database:**
+   ```bash
+   flask db upgrade
+   # or run your custom initialization script
 
-Bash
-pip install -r requirements.txt
-Set up the database:
-
-Bash
-flask db upgrade
-# or run your custom initialization script
-Run the application:
-
-Bash
-flask run --host=0.0.0.0 --port=5000
-Access the dashboard via http://localhost:5000
+5. **Run the application:**
+   ```bash
+      flask run --host=0.0.0.0 --port=5000
+__Access the dashboard via http://localhost:5000__
 
 💡 Usage
 Log In: Access the Deployin dashboard using your user or admin credentials.
