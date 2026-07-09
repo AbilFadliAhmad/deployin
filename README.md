@@ -61,7 +61,7 @@ To get a local copy up and running, follow these simple steps.
 
 5. **Run the application:**
    ```bash
-      flask run --host=0.0.0.0 --port=5000
+   flask run --host=0.0.0.0 --port=5000
 __Access the dashboard via http://localhost:5000__
 
 ## 💡 Usage
