@@ -64,12 +64,13 @@ To get a local copy up and running, follow these simple steps.
       flask run --host=0.0.0.0 --port=5000
 __Access the dashboard via http://localhost:5000__
 
-💡 Usage
+## 💡 Usage
 1. **Log In:** Access the Deployin dashboard using your user or admin credentials.
 
 2. **Select Template:** Choose a deployment template (e.g., Python Flask, Node.js).
 
-3. **Configure Payload:** * Input the target VPS IP and Password.
+3. **Configure Payload:** 
+   * **Input the target VPS IP and Password.
    * **Paste the GitHub repository link.
    * **Define the specific Port (e.g., 4818) and custom Domain (e.g., app.yourdomain.com).
 
