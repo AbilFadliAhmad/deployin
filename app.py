@@ -546,7 +546,7 @@ if __name__ == '__main__':
             # 5. Buat Template Global
             template = Template(
                 nama_teknologi='Python Flask (Gunicorn)',
-                perintah_default='mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt update && sudo apt upgrade -y && sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && gunicorn --bind {port_bind} app:app --daemon && {nginx_configuration}',
+                perintah_default='mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22 && gunicorn --bind {port_bind} app:app --daemon && {nginx_configuration}',
                 is_global=True
             )
             db.session.add(template)
