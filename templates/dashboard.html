@@ -280,6 +280,72 @@
             </div>
         </div>
     </main>
+
+    <!-- Success Deploy Modal -->
+    <div id="deploySuccessModal"
+         class="fixed inset-0 hidden bg-black/60 backdrop-blur-sm z-[999] flex items-center justify-center p-5">
+
+        <div class="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden">
+
+            <div class="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white text-center">
+
+                <div class="text-6xl mb-3">
+                    🎉
+                </div>
+
+                <h2 class="text-2xl font-bold">
+                    Deployment Berhasil!
+                </h2>
+
+                <p class="text-blue-100 mt-2 text-sm">
+                    Aplikasi berhasil diproses oleh DeployIn.
+                </p>
+
+            </div>
+
+            <div class="p-6">
+
+                <p class="text-gray-700 leading-relaxed">
+
+                    Terima kasih telah menggunakan
+                    <strong>DeployIn</strong>.
+
+                    <br><br>
+
+                    Jika aplikasi ini membantu pekerjaan Anda,
+                    mohon dukung pengembangannya dengan memberikan
+                    <strong>⭐ Star</strong>
+                    pada repository GitHub.
+
+                </p>
+
+                <div class="grid grid-cols-2 gap-3 mt-7">
+
+                    <a href="https://github.com/AbilFadliAhmad/DeployIn.git"
+                       target="_blank"
+                       id="btnGithubStar"
+
+                       class="bg-gray-900 hover:bg-black text-white py-3 rounded-xl font-bold text-center transition">
+
+                        ⭐ Beri Star
+
+                    </a>
+
+                    <button
+                        id="btnLater"
+
+                        class="bg-gray-200 hover:bg-gray-300 rounded-xl font-semibold transition">
+
+                        Nanti Saja
+
+                    </button>
+
+                </div>
+
+            </div>
+
+        </div>
+    </div>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             // --- LOGIKA NAVBAR & DROPDOWN ---
@@ -351,6 +417,29 @@
             const btnSaveEnv = document.getElementById('btnSaveEnv');
             const envPlainContent = document.getElementById('envPlainContent');
             const envBadge = document.getElementById('envBadge');
+
+            const githubModal = document.getElementById("deploySuccessModal");
+            const btnCloseGithubModal = document.getElementById("btnLater");
+            const btnGithubStar = document.getElementById("btnGithubStar");
+
+            function showGithubStarModal(){
+
+                if(localStorage.getItem("deployin_star_prompted")){
+                    return;
+                }
+
+                githubModal.classList.remove("hidden");
+
+                localStorage.setItem("deployin_star_prompted","true");
+            }
+
+            btnCloseGithubModal.onclick = () =>{
+                githubModal.classList.add("hidden");
+            }
+
+            btnGithubStar.onclick = () =>{
+                localStorage.setItem("deployin_star_prompted","true");
+            }
 
             // Simpan data env sementara di memori client
             let envDataString = "";
@@ -485,12 +574,18 @@
 
                     // Hentikan Loop Animasi Menunggu karena data sudah kembali dari VPS
                     isProcessing = false;
+                    console.log('sebelum: ', result.log)
                     logContent.innerText = result.log; // Bersihkan kalimat menunggu terakhir
+                    console.log('sesudah: ',logContent.innerText)
 
                     if (result.status === 'success' || result.status === 'warning') {
                         logContent.innerText += "\n\n[DEPLOYIN] ✅ Proses Eksekusi Selesai Sukses!";
                         statusBadge.innerText = "SUCCESS";
                         statusBadge.className = "text-xs bg-green-100 text-green-800 font-semibold px-2 py-0.5 rounded";
+
+                        setTimeout(() => {
+                            showGithubStarModal();
+                        }, 800);
                     } else {
                         logContent.innerText += "\n\n[DEPLOYIN] ❌ Proses Eksekusi Gagal di VPS!";
                         statusBadge.innerText = "FAILED";
@@ -504,7 +599,7 @@
                 } finally {
                     const wrapper = document.getElementById('logWrapper');
                     wrapper.scrollTop = wrapper.scrollHeight;
-                    
+
                     isProcessing = false;
                     btnText.innerText = `🚀 Mulai Deploy Sekarang`;
                     spinner.classList.add('hidden');
