@@ -9,6 +9,10 @@ from sqlalchemy import func
 from werkzeug.security import generate_password_hash
 import subprocess
 import socket
+import os
+import tempfile
+import uuid
+
 
 # --- KONFIGURASI FLASK-LOGIN ---
 login_manager = LoginManager()
@@ -87,32 +91,146 @@ def is_local_target(target_ip: str) -> bool:
 
     try:
         target_ip = target_ip.strip()
-
         local_ips = {
             "127.0.0.1",
             "localhost",
+            "::1"
         }
-
-        # Semua IP dari hostname
+        # Hostname
         try:
             local_ips.update(socket.gethostbyname_ex(socket.gethostname())[2])
-        except:
+        except Exception:
             pass
 
-        # Semua IP dari interface jaringan
-        result = subprocess.run(
-            ["hostname", "-I"],
-            capture_output=True,
-            text=True
-        )
+        # Semua IP interface Linux
+        try:
+            result = subprocess.run(
+                ["hostname", "-I"],
+                capture_output=True,
+                text=True
+            )
 
-        for ip in result.stdout.split():
-            local_ips.add(ip.strip())
+            if result.returncode == 0:
+                for ip in result.stdout.split():
+                    local_ips.add(ip.strip())
+
+        except Exception:
+            pass
 
         return target_ip in local_ips
 
     except Exception:
         return False
+
+def create_temp_deploy_script(script_content: str):
+    """
+    Membuat temporary bash script deployment.
+    """
+    temp = tempfile.NamedTemporaryFile(
+        mode="w",
+        delete=False,
+        suffix=".sh",
+        newline='\n'  # <--- Tambahkan ini agar aman saat dikirim ke Linux
+    )
+
+    temp.write(
+        "#!/bin/bash\n"
+        "set -e\n"
+        "set -o pipefail\n\n"
+    )
+
+    temp.write(script_content)
+    temp.close()
+    os.chmod(temp.name, 0o755)
+    print('namaLag', temp.name)
+    return temp.name
+
+def validate_bash_script(script_path):
+    """
+    Mengecek syntax bash sebelum dijalankan.
+    """
+    if os.name == "nt":
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr=""
+        )
+
+    result = subprocess.run(
+        ["bash", "-n", script_path],
+        capture_output=True,
+        text=True
+    )
+    return result
+
+def run_local_deploy(script_path, password):
+    """
+    Menjalankan deployment di server yang sama.
+    """
+    if os.name == "nt":
+        raise RuntimeError(
+            "Local Deploy hanya tersedia pada Linux."
+        )
+
+    return subprocess.run(
+        ["sudo", "-S", "bash", script_path],
+        input=password + "\n",
+        capture_output=True,
+        text=True,
+        timeout=1800
+    )
+
+def run_remote_deploy(
+    ip,
+    username,
+    password,
+    script_path
+):
+    """
+    Upload temporary bash script ke server tujuan
+    kemudian menjalankannya.
+    """
+    ssh=None
+    sftp=None
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        ssh.connect(
+            port=22,
+            hostname=ip,
+            username=username,
+            password=password,
+            timeout=10
+        )
+
+        sftp = ssh.open_sftp()
+
+        remote_script = f"/tmp/deploy_{uuid.uuid4().hex}.sh"
+        sftp.put(script_path, remote_script)
+        sftp.chmod(remote_script, 0o755)
+        perintah_remote = f"echo '{password}' | sudo -S bash {remote_script}"
+        stdin, stdout, stderr = ssh.exec_command(perintah_remote)
+
+        exit_status = stdout.channel.recv_exit_status()
+        out = stdout.read().decode()
+        err = stderr.read().decode()
+
+        ssh.exec_command(f"echo '{password}' | sudo -S rm -f {remote_script}")
+        sftp.close()
+        ssh.close()
+
+        return exit_status, out, err
+    finally:
+        if sftp:
+            sftp.close()
+
+        if ssh:
+            ssh.close()
+
+
+
 
 # --- API UNTUK MENGEKSEKUSI SSH (TAHAP 4 & LOGIKA PORT) ---
 @app.route('/api/execute_deploy', methods=['POST'])
@@ -190,32 +308,35 @@ def execute_deploy():
     if domain:
         port_bind = f"127.0.0.1:{port}"
 
-        # Format string Nginx biasa, biarkan lekukannya rapi mengikuti Python Anda
-        teks_konfigurasi_nginx = f"""server {{
-                    listen 80;
-                    server_name {domain};
-
-                    location / {{
-                        proxy_pass http://127.0.0.1:{port};
-                        proxy_set_header Host \$host;
-                        proxy_set_header X-Real-IP \$remote_addr;
-                        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                        proxy_set_header X-Forwarded-Proto \$scheme;
-                    }}
-                }}"""
-        # Amankan tanda petik satu (') jika ada di teks konfigurasi
-        nginx_aman = teks_konfigurasi_nginx.replace("'", "'\\''")
-
-        # Kita gunakan echo untuk menulis file ke sites-available. Dijamin tidak akan memicu error EOF!
         perintah_nginx = f"""
-                    sudo mkdir -p /etc/nginx/sites-available
-                    sudo mkdir -p /etc/nginx/sites-enabled
-                    sudo echo '{nginx_aman}' | sudo tee /etc/nginx/sites-available/{target_dir} > /dev/null
-                    sudo rm -f /etc/nginx/sites-enabled/{target_dir}
-                    sudo ln -sf /etc/nginx/sites-available/{target_dir} /etc/nginx/sites-enabled/{target_dir}
-                    sudo rm -f /etc/nginx/sites-enabled/default || true
-                    sudo systemctl restart nginx || sudo service nginx restart
-                """
+        mkdir -p /etc/nginx/sites-available
+        mkdir -p /etc/nginx/sites-enabled
+
+        cat <<'EOF' > /etc/nginx/sites-available/{target_dir}
+        server {{
+            listen 80;
+            server_name {domain};
+
+            location / {{
+                proxy_pass http://127.0.0.1:{port};
+
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }}
+        }}
+        EOF
+
+        ln -sfn /etc/nginx/sites-available/{target_dir} \
+                /etc/nginx/sites-enabled/{target_dir}
+
+        rm -f /etc/nginx/sites-enabled/default || true
+
+        nginx -t
+
+        systemctl reload nginx
+        """
     else:
         # Jika domain KOSONG, gunicorn langsung dibuka ke publik, Nginx dikosongkan (string kosong)
         port_bind = f"0.0.0.0:{port}"
@@ -231,51 +352,45 @@ def execute_deploy():
 
     # Gabungkan perintah matikan port dengan perintah template
     perintah_final = perintah_awal + perintah_siap_eksekusi
-    print(perintah_final)
 
-    ssh = None
+    script_path = create_temp_deploy_script(perintah_final)
+
+    check = validate_bash_script(script_path)
+    print('sebelumCHeck: ', check)
+
+    if check.returncode != 0:
+        os.remove(script_path)
+
+        return jsonify({
+            "status": "error",
+            "log": check.stderr
+        })
+    print('sesudahCheck')
 
     try:
 
         status_deploy = "success"
 
         if is_local_target(ip):
-
             deploy_mode = "LOCAL"
 
-            result = subprocess.run(
-                perintah_final,
-                shell=True,
-                executable="/bin/bash",
-                capture_output=True,
-                text=True
+            result = run_local_deploy(
+                script_path,
+                password
             )
 
             exit_status = result.returncode
             out = result.stdout
             err = result.stderr
-
         else:
-
+            print('remote: ', script_path)
             deploy_mode = "REMOTE"
-
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-            ssh.connect(
-                hostname=ip,
-                port=22,
-                username=username,
-                password=password,
-                timeout=10
+            exit_status, out, err = run_remote_deploy(
+                ip,
+                username,
+                password,
+                script_path
             )
-
-            stdin, stdout, stderr = ssh.exec_command(perintah_final)
-
-            exit_status = stdout.channel.recv_exit_status()
-
-            out = stdout.read().decode("utf-8")
-            err = stderr.read().decode("utf-8")
 
         full_log = (
             f"--- DEPLOY MODE ---\n"
@@ -287,12 +402,13 @@ def execute_deploy():
             f"{out}\n"
         )
 
-        if err:
+        if err.strip() and exit_status != 0:
             full_log += (
                 "\n--- ERROR / WARNING ---\n"
                 f"{err}"
             )
 
+        status_deploy = "success" if exit_status == 0 else "fail"
         return jsonify({
             "status": "success" if exit_status == 0 else "warning",
             "log": full_log
@@ -301,42 +417,36 @@ def execute_deploy():
 
 
     except paramiko.AuthenticationException:
-
         status_deploy = "fail"
-
         return jsonify({
-
             "status": "error",
-
             "log": "Autentikasi SSH gagal."
-
         })
 
 
     except Exception as e:
-
         status_deploy = "fail"
-
         return jsonify({
-
             "status": "error",
-
             "log": f"Terjadi kesalahan: {str(e)}"
-
         })
 
     finally:
-        if ssh:
-            ssh.close()
+        try:
+            if script_path and os.path.exists(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
 
-        log_aktivitas = DeploymentLog(
+        log = DeploymentLog(
             user_id=current_user.id,
             status=status_deploy,
             github_link=github_link,
             app=target_dir,
             template_id=template_id
         )
-        db.session.add(log_aktivitas)
+
+        db.session.add(log)
         db.session.commit()
 
 # --- RUTE MANAJEMEN TEMPLATE ---
@@ -642,7 +752,7 @@ def init_database():
             # 5. Buat Template Global
             template = Template(
                 nama_teknologi='Python Flask (Gunicorn)',
-                perintah_default='mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22 && gunicorn --bind {port_bind} app:app --daemon && {nginx_configuration}',
+                perintah_default='pkill -f "gunicorn.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22 && gunicorn --bind {port_bind} app:app --daemon && {nginx_configuration}',
                 is_global=True
             )
             db.session.add(template)
