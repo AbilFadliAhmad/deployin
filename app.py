@@ -513,8 +513,7 @@ def update_user(user_id):
 
     return redirect(request.referrer or url_for('dashboard'))
 
-# --- JALANKAN APLIKASI & AUTO SETUP DATABASE ---
-if __name__ == '__main__':
+def init_database():
     # 1. Buka konteks aplikasi agar bisa berinteraksi dengan database
     with app.app_context():
         # 2. Buat file SQLite dan tabel-tabelnya jika belum ada
@@ -556,6 +555,12 @@ if __name__ == '__main__':
             print(f"Data awal berhasil dibuat! Admin dan {len(daftar_nama)} user telah ditambahkan.")
         else:
             print("Database sudah berisi data. Melewati proses seeding.")
+
+init_database()
+
+
+# --- JALANKAN APLIKASI & AUTO SETUP DATABASE ---
+if __name__ == '__main__':
 
     # 4. Jalankan server Flask
     app.run(debug=True, port=5000)
