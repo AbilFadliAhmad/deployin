@@ -248,7 +248,7 @@ def execute_nginx(
 mkdir -p /etc/nginx/sites-available
 mkdir -p /etc/nginx/sites-enabled
 
-cat >/etc/nginx/sites-available/{config_name} <<EOF
+cat >/etc/nginx/sites-available/{config_name} <<'EOF'
 server {{
     listen 80;
     server_name {domain};
