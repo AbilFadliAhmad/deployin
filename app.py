@@ -142,7 +142,6 @@ def create_temp_deploy_script(script_content: str):
     temp.write(script_content)
     temp.close()
     os.chmod(temp.name, 0o755)
-    print('namaLag', temp.name)
     return temp.name
 
 def validate_bash_script(script_path):
@@ -309,34 +308,32 @@ def execute_deploy():
         port_bind = f"127.0.0.1:{port}"
 
         perintah_nginx = f"""
-        mkdir -p /etc/nginx/sites-available
-        mkdir -p /etc/nginx/sites-enabled
+mkdir -p /etc/nginx/sites-available
+mkdir -p /etc/nginx/sites-enabled
 
-        cat <<'EOF' > /etc/nginx/sites-available/{target_dir}
-        server {{
-            listen 80;
-            server_name {domain};
+cat <<'EOF' > /etc/nginx/sites-available/{target_dir}
+server {{
+    listen 80;
+    server_name {domain};
 
-            location / {{
-                proxy_pass http://127.0.0.1:{port};
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
 
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-            }}
-        }}
-        EOF
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+EOF
 
-        ln -sfn /etc/nginx/sites-available/{target_dir} \
-                /etc/nginx/sites-enabled/{target_dir}
-
-        rm -f /etc/nginx/sites-enabled/default || true
-
-        nginx -t
-
-        systemctl reload nginx
+ln -sfn "/etc/nginx/sites-available/{target_dir}" "/etc/nginx/sites-enabled/{target_dir}"
+rm -f /etc/nginx/sites-enabled/default || true
+nginx -t
+systemctl reload nginx
         """
+        print(perintah_nginx)
+        return jsonify({'status': 'error', 'log': perintah_awal}), 403
     else:
         # Jika domain KOSONG, gunicorn langsung dibuka ke publik, Nginx dikosongkan (string kosong)
         port_bind = f"0.0.0.0:{port}"
@@ -441,7 +438,7 @@ def execute_deploy():
         #
         #     if script_path and os.path.exists(script_path):
         #         os.remove(script_path)
-        # 
+        #
         # except Exception:
         #
         #     pass
