@@ -163,7 +163,7 @@ def validate_bash_script(script_path):
     )
     return result
 
-def run_local_deploy(script_path, password):
+def run_local_deploy(_, password, script_path, timeout=1800):
     """
     Menjalankan deployment di server yang sama.
     """
@@ -177,66 +177,147 @@ def run_local_deploy(script_path, password):
         input=password + "\n",
         capture_output=True,
         text=True,
-        timeout=1800
+        timeout=timeout
     )
 
 def run_remote_deploy(
-    ip,
-    username,
+    ssh,
     password,
-    script_path
+    script_path,
+    timeout=1800
 ):
     """
     Upload temporary bash script ke server tujuan
     kemudian menjalankannya.
     """
-    ssh=None
     sftp=None
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        ssh.connect(
-            port=22,
-            hostname=ip,
-            username=username,
-            password=password,
-            timeout=10
-        )
-
         sftp = ssh.open_sftp()
 
         remote_script = f"/tmp/deploy_{uuid.uuid4().hex}.sh"
         sftp.put(script_path, remote_script)
         sftp.chmod(remote_script, 0o755)
         perintah_remote = f"echo '{password}' | sudo -S bash {remote_script}"
-        stdin, stdout, stderr = ssh.exec_command(perintah_remote)
 
-        exit_status = stdout.channel.recv_exit_status()
-        out = stdout.read().decode()
-        err = stderr.read().decode()
+        try:
+            stdin, stdout, stderr = ssh.exec_command(perintah_remote, timeout=timeout)
+            channel = stdout.channel
+
+            # --- LOGIKA PENANGANAN TIMEOUT SECARA MANUAL ---
+            import time
+            start_time = time.time()
+
+            # Tunggu sampai status keluar (exit status) siap,
+            # ATAU batalkan jika waktu tunggu melebihi batasan timeout
+            while not channel.exit_status_ready():
+                # Periksa apakah sudah melewati batas timeout
+                if time.time() - start_time > timeout:
+                    return -200, "Remote Startup OK (Timeout reached as expected)", ""
+
+                # Istirahat sebentar (0.1 detik) agar CPU server Flask tidak bekerja 100%
+                time.sleep(0.1)
+
+            exit_status = stdout.channel.recv_exit_status()
+            out = stdout.read().decode()
+            err = stderr.read().decode()
+        except socket.timeout:
+            return -200, "Remote Startup OK (Timeout reached as expected)", ""
 
         ssh.exec_command(f"echo '{password}' | sudo -S rm -f {remote_script}")
         sftp.close()
-        ssh.close()
 
         return exit_status, out, err
     finally:
+        # Jika terjadi timeout, file remote dibersihkan di sini agar tidak tertinggal
+        try:
+            ssh.exec_command(f"echo '{password}' | sudo -S rm -f {remote_script}")
+        except Exception:
+            pass
+
         if sftp:
             sftp.close()
 
-        if ssh:
-            ssh.close()
 
+def verify_startup(
+        execute_command,
+        startup_command,
+        production_command,
+        password,
+        ssh,
+        timeout=10
+):
+    # Inisialisasi variabel agar bisa diakses di blok finally jika terjadi error di awal
+    startup_path = None
+    production_path = None
 
+    try:
+        # 1. Buat File script deployment sementara
+        startup_path = create_temp_deploy_script(startup_command)
+        production_path = create_temp_deploy_script(production_command)
+
+        # 2. Jalankan startup command
+        try:
+            status, out, err = execute_command(
+                ssh,
+                password,
+                startup_path,
+                timeout=3
+            )
+
+            # --- CEK PENANDA TIMEOUT REMOTE ---
+            if status == -200:
+                print(f"[STARTUP] Remote aplikasi sukses bertahan berjalan (Timeout tercapai).")
+                status, out, err = 0, out, ""
+
+            # Jika perintah selesai dengan status error sungguhan sebelum timeout
+            elif status != 0:
+                return status, out, err
+
+        except subprocess.TimeoutExpired:
+            # PENTING: Untuk startup script (misal menjalankan server),
+            # jika terjadi timeout, itu tandanya aplikasi BERHASIL menyala dan bertahan hidup!
+            print(f"[STARTUP] Aplikasi sukses bertahan berjalan selama {timeout} detik.")
+            status, out, err = 0, "Startup OK (Timeout reached as expected)", ""
+
+        except Exception as e:
+            # Menangkap error jaringan atau eksekusi lainnya pada tahap startup
+            return 1, "", f"Gagal mengeksekusi startup: {str(e)}"
+
+        # TODO: kill process startup (Jika dijalankan lokal/remote via background process)
+
+        # 3. Jalankan production command
+        status, out, err = execute_command(
+            ssh,
+            password,
+            production_path,
+            timeout=timeout
+        )
+        return status, out, err
+
+    except Exception as main_error:
+        # Menangkap error global jika ada kegagalan tak terduga
+        return 1, "", f"Terjadi kesalahan pada alur verifikasi: {str(main_error)}"
+
+    finally:
+        # 4. PEMBERSIHAN MUTLAK: File sementara lokal wajib dihapus dalam kondisi apa pun
+        try:
+            if startup_path and os.path.exists(startup_path):
+                os.remove(startup_path)
+        except Exception:
+            pass
+
+        try:
+            if production_path and os.path.exists(production_path):
+                os.remove(production_path)
+        except Exception:
+            pass
 
 def execute_nginx(
     domain,
     port,
     local,
-    ip=None,
-    username=None,
-    password=None
+    password=None,
+    ssh=None
 ):
     """
     Membuat konfigurasi nginx lalu reload.
@@ -279,8 +360,9 @@ systemctl reload nginx
     try:
         if local:
             result = run_local_deploy(
+                None,
+                password,
                 script_path,
-                password
             )
             return (
                 result.returncode,
@@ -289,8 +371,7 @@ systemctl reload nginx
             )
         else:
             return run_remote_deploy(
-                ip,
-                username,
+                ssh,
                 password,
                 script_path
             )
@@ -307,15 +388,31 @@ def execute_deploy():
     ip = data.get('ip')
     password = data.get('password')
     github_link = data.get('github_link')
-    perintah_mentah = data.get('perintah')
     port = str(data.get('port','')).strip()  # Pastikan bertipe string dan bersih dari spasi
     kill_port = data.get('kill_port', False)  # Menangkap perintah dari kotak dialog
     env_content = data.get('env', '').strip()
     domain = data.get('domain', '').strip()  # Ambil input domain baru
     username = data.get('username', 'root')
 
-    if not all([ip, password, github_link, perintah_mentah, port]):
+    template = Template.query.get(template_id)
+
+    if not template:
+        return jsonify({
+            "status": "error",
+            "log": "Template tidak ditemukan."
+        }), 404
+
+    # Ambil data dari database
+    perintah_mentah = template.perintah_default
+    startup_command = template.startup_command
+    production_command = template.production_command
+
+    if not all([ip, password, github_link, perintah_mentah, startup_command, production_command, port]):
         return jsonify({'status': 'error', 'log': 'Semua field utama harus diisi!'}), 400
+
+    # Check apakah ini dijalankan dilocal
+    is_local = is_local_target(ip)
+
 
     # ─── VALIDASI PROTEKSI PORT VITAL VPS (BACKEND PROTECTION) ───
     # Daftar port kritis sistem, panel admin, proxy, dan database utama
@@ -373,22 +470,6 @@ def execute_deploy():
     # 4. LOGIKA BARU: OTOMASI NGINX REVERSE PROXY
     if domain:
         port_bind = f"127.0.0.1:{port}"
-
-        nginx_status, nginx_out, nginx_err = execute_nginx(
-            domain=domain,
-            port=port,
-            local=is_local_target(ip),
-            ip=ip,
-            username=username,
-            password=password
-        )
-
-        if nginx_status != 0:
-            return jsonify({
-                "status": "error",
-                "log": nginx_err or nginx_out
-            })
-
     else:
         # Jika domain KOSONG, gunicorn langsung dibuka ke publik, Nginx dikosongkan (string kosong)
         port_bind = f"0.0.0.0:{port}"
@@ -399,6 +480,13 @@ def execute_deploy():
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{port}', str(port))
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{env}', perintah_env)
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{port_bind}', port_bind)
+
+    # 6. MENGGANTI VARIABEL DI TEMPLATE PERINTAH
+    startup_command = startup_command.replace('{port_bind}', port_bind)
+    startup_command = startup_command.replace('{target_dir}', target_dir)
+
+    production_command = production_command.replace('{port_bind}', port_bind)
+    production_command = production_command.replace('{target_dir}', target_dir)
 
     # Gabungkan perintah matikan port dengan perintah template
     perintah_final = perintah_awal + perintah_siap_eksekusi
@@ -415,30 +503,64 @@ def execute_deploy():
             "log": check.stderr
         })
 
+    ssh = None
     try:
-
         status_deploy = "success"
-
-        if is_local_target(ip):
+        if is_local:
             deploy_mode = "LOCAL"
 
             result = run_local_deploy(
+                None,
+                password,
                 script_path,
-                password
             )
 
             exit_status = result.returncode
             out = result.stdout
             err = result.stderr
+
+            # 2. Cek apakah deployment utama berhasil sebelum lanjut ke verify_startup
+            if exit_status == 0:
+                v_status, v_out, v_err = verify_startup(run_local_deploy, startup_command, production_command, password, ssh)
+
+                # Gabungkan output agar log tetap lengkap
+                out += f"\n--- STARTUP LOG ---\n{v_out}"
+                if v_err:
+                    err += f"\n--- STARTUP ERROR ---\n{v_err}"
+
+                # Jika verify_startup gagal, timpa status utama menjadi gagal
+                if v_status != 0:
+                    exit_status = v_status
+
         else:
+            ssh= paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(
+                hostname=ip,
+                username=username,
+                password=password,
+                timeout=10,
+                port=22
+            )
+            print('berhasil remote')
             deploy_mode = "REMOTE"
             exit_status, out, err = run_remote_deploy(
-                ip,
-                username,
+                ssh,
                 password,
-                script_path
+                script_path,
+                timeout=100
             )
+            print('berhasil menjalnkan deploy')
+            if exit_status == 0:
+                v_status, v_out, v_err = verify_startup(run_remote_deploy, startup_command, production_command, password, ssh)
+                # Gabungkan output agar log tetap lengkap
+                out += f"\n--- STARTUP LOG ---\n{v_out}"
+                if v_err:
+                    err += f"\n--- STARTUP ERROR ---\n{v_err}"
 
+                # Jika verify_startup gagal, timpa status utama menjadi gagal
+                if v_status != 0:
+                    exit_status = v_status
 
         full_log = (
             f"--- DEPLOY MODE ---\n"
@@ -459,6 +581,23 @@ def execute_deploy():
             )
 
         status_deploy = "success" if exit_status == 0 else "fail"
+
+        if exit_status == 0 and domain:
+            nginx_status, nginx_out, nginx_err = execute_nginx(
+                domain=domain,
+                port=port,
+                local=is_local,
+                password=password,
+                ssh=ssh
+            )
+
+            if nginx_status != 0:
+                status_deploy = "fail"  # <-- Tambahkan ini agar sinkron dengan database log
+                return jsonify({
+                    "status": "error",
+                    "log": nginx_err or nginx_out
+                })
+
         return jsonify({
             "status": "success" if exit_status == 0 else "warning",
             "log": full_log
@@ -485,27 +624,21 @@ def execute_deploy():
 
     finally:
 
-        # try:
-        #
-        #     if script_path and os.path.exists(script_path):
-        #         os.remove(script_path)
-        #
-        # except Exception:
-        #
-        #     pass
+        try:
+            if script_path and os.path.exists(script_path):
+                os.remove(script_path)
+        except Exception:
+            pass
+
+        if ssh:
+            ssh.close()
 
         log = DeploymentLog(
-
             user_id=current_user.id,
-
             status=status_deploy,
-
             github_link=github_link,
-
             app=target_dir,
-
             template_id=template_id
-
         )
 
         db.session.add(log)
@@ -518,6 +651,8 @@ def manage_templates():
     if request.method == 'POST':
         nama_teknologi = request.form.get('nama_teknologi')
         perintah_default = request.form.get('perintah_default')
+        production_command = request.form.get('production_command')
+        startup_command = request.form.get('startup_command')
 
         # Cek apakah ini dicentang sebagai template global
         # (Hanya berlaku jika yang menekan tombol adalah admin)
@@ -528,6 +663,8 @@ def manage_templates():
         if nama_teknologi and perintah_default:
             new_template = Template(
                 nama_teknologi=nama_teknologi,
+                production_command=production_command,
+                startup_command=startup_command,
                 perintah_default=perintah_default,
                 is_global=is_global,
                 # Jika global, user_id dikosongkan. Jika pribadi, isi dengan ID pembuatnya.
@@ -562,6 +699,8 @@ def edit_template(id):
     if current_user.role == 'admin' or template.user_id == current_user.id:
         template.nama_teknologi = request.form.get('nama_teknologi')
         template.perintah_default = request.form.get('perintah_default')
+        template.production_command = request.form.get('production_command')
+        template.startup_command = request.form.get('startup_command')
 
         # Cek checkbox global (Hanya Admin)
         if current_user.role == 'admin':
@@ -814,8 +953,10 @@ def init_database():
             # 5. Buat Template Global
             template = Template(
                 nama_teknologi='Python Flask (Gunicorn)',
-                perintah_default='pkill -f "gunicorn.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22 && gunicorn --bind {port_bind} app:app --daemon',
-                is_global=True
+                perintah_default='pkill -f "gunicorn.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22',
+                is_global=True,
+                startup_command='gunicorn --bind {port_bind} app:app',
+                production_command='gunicorn --bind {port_bind} app:app --daemon'
             )
             db.session.add(template)
 
