@@ -266,7 +266,6 @@ def verify_startup(
 
             # --- CEK PENANDA TIMEOUT REMOTE ---
             if status == -200:
-                print(f"[STARTUP] Remote aplikasi sukses bertahan berjalan (Timeout tercapai).")
                 status, out, err = 0, out, ""
 
             # Jika perintah selesai dengan status error sungguhan sebelum timeout
@@ -276,7 +275,6 @@ def verify_startup(
         except subprocess.TimeoutExpired:
             # PENTING: Untuk startup script (misal menjalankan server),
             # jika terjadi timeout, itu tandanya aplikasi BERHASIL menyala dan bertahan hidup!
-            print(f"[STARTUP] Aplikasi sukses bertahan berjalan selama {timeout} detik.")
             status, out, err = 0, "Startup OK (Timeout reached as expected)", ""
 
         except Exception as e:
@@ -393,6 +391,7 @@ def execute_deploy():
     env_content = data.get('env', '').strip()
     domain = data.get('domain', '').strip()  # Ambil input domain baru
     username = data.get('username', 'root')
+    host = "127.0.0.1" if domain else "0.0.0.0"
 
     template = Template.query.get(template_id)
 
@@ -465,27 +464,23 @@ def execute_deploy():
     if env_content:
         # Menggunakan ./.env agar file dibuat di dalam folder apa pun yang sedang aktif (CD) saat itu
         env_aman = env_content.replace("'", "'\\''")
-        perintah_env = f"\necho '{env_aman}' > ./.env\n"
-
-    # 4. LOGIKA BARU: OTOMASI NGINX REVERSE PROXY
-    if domain:
-        port_bind = f"127.0.0.1:{port}"
-    else:
-        # Jika domain KOSONG, gunicorn langsung dibuka ke publik, Nginx dikosongkan (string kosong)
-        port_bind = f"0.0.0.0:{port}"
+        # perintah_env = f"echo '{env_aman}' > ./.env && "
+        perintah_env = f"printf '%s' '{env_aman}' > ./.env && "
 
     # 5. MENGGANTI VARIABEL DI TEMPLATE PERINTAH
     perintah_siap_eksekusi = perintah_mentah.replace('{github_link}', github_link)
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{target_dir}', target_dir)
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{port}', str(port))
     perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{env}', perintah_env)
-    perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{port_bind}', port_bind)
+    perintah_siap_eksekusi = perintah_siap_eksekusi.replace('{host}', host)
 
     # 6. MENGGANTI VARIABEL DI TEMPLATE PERINTAH
-    startup_command = startup_command.replace('{port_bind}', port_bind)
+    startup_command = startup_command.replace('{host}', host)
+    startup_command = startup_command.replace('{port}', str(port))
     startup_command = startup_command.replace('{target_dir}', target_dir)
 
-    production_command = production_command.replace('{port_bind}', port_bind)
+    production_command = production_command.replace('{host}', host)
+    production_command = production_command.replace('{port}', str(port))
     production_command = production_command.replace('{target_dir}', target_dir)
 
     # Gabungkan perintah matikan port dengan perintah template
@@ -542,7 +537,6 @@ def execute_deploy():
                 timeout=10,
                 port=22
             )
-            print('berhasil remote')
             deploy_mode = "REMOTE"
             exit_status, out, err = run_remote_deploy(
                 ssh,
@@ -550,7 +544,6 @@ def execute_deploy():
                 script_path,
                 timeout=100
             )
-            print('berhasil menjalnkan deploy')
             if exit_status == 0:
                 v_status, v_out, v_err = verify_startup(run_remote_deploy, startup_command, production_command, password, ssh)
                 # Gabungkan output agar log tetap lengkap
@@ -951,14 +944,24 @@ def init_database():
                 db.session.add(baru)
 
             # 5. Buat Template Global
-            template = Template(
-                nama_teknologi='Python Flask (Gunicorn)',
-                perintah_default='pkill -f "gunicorn.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22',
-                is_global=True,
-                startup_command='cd /deployin/flask/{target_dir} && source venv/bin/activate && gunicorn --bind {port_bind} app:app',
-                production_command='cd /deployin/flask/{target_dir} && source venv/bin/activate && gunicorn --bind {port_bind} app:app --daemon'
-            )
-            db.session.add(template)
+            templates = [
+                Template(
+                    nama_teknologi='Python Flask (Gunicorn)',
+                    perintah_default='pkill -f "gunicorn.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p flask && cd flask && rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && {env} sudo apt install python3-pip python3-venv nginx -y && python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt && pip install gunicorn && rm -rf gunicorn.conf.py && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22',
+                    is_global=True,
+                    startup_command='cd /deployin/flask/{target_dir} && source venv/bin/activate && gunicorn --bind {host}:{port} app:app',
+                    production_command='cd /deployin/flask/{target_dir} && source venv/bin/activate && gunicorn --bind {host}:{port} app:app --daemon'
+                ),
+                Template(
+                    nama_teknologi='Laravel',
+                    perintah_default='pkill -f "php artisan serve.*:{port}" || true && mkdir -p /deployin && cd /deployin && mkdir -p laravel && cd laravel && sudo rm -rf {target_dir} && git clone {github_link} {target_dir} && cd {target_dir} && sudo apt-get update && sudo apt-get install -y php-cli php-fpm php-mbstring php-xml php-bcmath php-curl php-tokenizer php-zip php-sqlite3 php-mysql unzip nginx curl && curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer && {env} composer install --no-dev --optimize-autoloader -n && php artisan key:generate && php artisan migrate --force -n && php artisan storage:link || true && chmod -R 775 storage bootstrap/cache && sudo chown -R www-data:www-data . && sudo ufw allow 80 && sudo ufw allow 443 && sudo ufw allow {port} && sudo ufw allow 22',
+                    is_global=True,
+                    startup_command='cd /deployin/laravel/{target_dir} && php artisan serve --host={host} --port={port}',
+                    production_command='cd /deployin/laravel/{target_dir} && nohup php artisan serve --host={host} --port={port} > /dev/null 2>&1 &'
+                )
+            ]
+
+            db.session.add_all(templates)
 
             # 6. Simpan semua data sekaligus ke database
             db.session.commit()
@@ -973,4 +976,4 @@ init_database()
 if __name__ == '__main__':
 
     # 4. Jalankan server Flask
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=8001)
